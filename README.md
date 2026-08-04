@@ -1,17 +1,21 @@
 # BeatRain
 
-A fast, mobile-friendly rhythm game played with four keyboard keys or touch lanes. Hit falling notes in time, build combos, and aim for a new high score.
+BeatRain is an immersive four-lane rhythm game with a perspective-driven neon track, original Web Audio soundscape, and responsive keyboard and touch controls.
 
-## Features
+## Highlights
 
-- Easy, normal, and hard difficulty modes
-- Keyboard controls with `D`, `F`, `J`, and `K`
-- Touch controls for mobile devices
-- Score, combo, lives, and accuracy ranking
-- Pause, mute, restart, and high-score support
-- Generated background audio with no game framework
+- Perspective-rendered 3D track and depth-scaled tiles
+- Frame-rate-independent movement for consistent timing across 60 Hz and 120 Hz devices
+- Original ambient music and procedural hit, miss, milestone, and result sounds
+- Touch-first controls with safe-area support, haptic feedback, and orientation handling
+- Keyboard controls using `D`, `F`, `J`, and `K`
+- Drift, Flow, and Rush difficulty modes
+- Accuracy grades, combo scoring, lives, and per-difficulty personal bests
+- Automatic pause when the browser loses focus or the page becomes hidden
+- Reduced-motion support and accessible button labels
+- No game framework or external audio files
 
-## Run locally
+## Play locally
 
 ```bash
 git clone https://github.com/naziulsiam/BeatRain.git
@@ -19,14 +23,24 @@ cd BeatRain
 python3 -m http.server 8000
 ```
 
-Open [http://localhost:8000](http://localhost:8000).
+Open [http://localhost:8000](http://localhost:8000) in a modern browser.
 
-## Project files
+## Controls
 
-- `index.html` — screens, controls, and canvas
-- `style.css` — game presentation and responsive layout
-- `game.js` — timing, input, scoring, audio, and game state
+| Action | Keyboard | Mobile |
+|---|---|---|
+| Play lanes | `D` `F` `J` `K` | Tap the four bottom pads |
+| Pause/resume | `P` or `Esc` | Pause button |
+| Sound | Sound button | Sound button |
 
-## How to play
+Tap or press when a tile reaches the illuminated line. Precise hits score more points, while longer combos increase the multiplier.
 
-Choose a difficulty, then press the matching key—or tap its lane—when a falling note reaches the hit line. Missing notes costs lives, while accurate hits increase your score and combo.
+## Architecture
+
+- `index.html` — semantic game screens, HUD, results, and accessible controls
+- `style.css` — responsive glass interface, mobile safe areas, and visual feedback
+- `game.js` — canvas renderer, timing engine, Web Audio soundscape, input, scoring, and persistence
+
+## Browser notes
+
+Audio begins only after the player presses **Enter the flow**, following browser autoplay rules. Haptic feedback is used when supported and ignored safely on unsupported devices.
