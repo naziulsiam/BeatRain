@@ -1,793 +1,703 @@
-// ============== AUDIO ENGINE ==============
-class AudioEngine {
+'use strict';
+
+class Soundscape {
   constructor() {
     this.ctx = null;
-    this.initialized = false;
+    this.master = null;
+    this.music = null;
+    this.effects = null;
     this.muted = false;
-    this.bgNodes = null;
-    this.masterGain = null;
+    this.timer = null;
+    this.padNodes = [];
+    this.beat = 0;
   }
 
-  init() {
-    if (this.initialized) return;
-    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-    this.masterGain = this.ctx.createGain();
-    this.masterGain.gain.setValueAtTime(1, this.ctx.currentTime);
-    this.masterGain.connect(this.ctx.destination);
-    this.initialized = true;
+  async init() {
+    if (!this.ctx) {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      this.ctx = new AudioContext();
+      this.master = this.ctx.createGain();
+      this.music = this.ctx.createGain();
+      this.effects = this.ctx.createGain();
+      this.master.gain.value = this.muted ? 0 : 0.72;
+      this.music.gain.value = 0.2;
+      this.effects.gain.value = 0.72;
+      this.music.connect(this.master);
+      this.effects.connect(this.master);
+      this.master.connect(this.ctx.destination);
+    }
+    if (this.ctx.state === 'suspended') await this.ctx.resume();
   }
 
-  setMute(muted) {
-    this.muted = muted;
-    if (this.masterGain) {
-      this.masterGain.gain.setTargetAtTime(muted ? 0 : 1, this.ctx.currentTime, 0.05);
+  setMuted(value) {
+    this.muted = value;
+    if (this.master && this.ctx) {
+      this.master.gain.cancelScheduledValues(this.ctx.currentTime);
+      this.master.gain.setTargetAtTime(value ? 0 : 0.72, this.ctx.currentTime, 0.035);
     }
   }
 
-  getNoteFrequency(lane, variation = 0) {
-    const baseNotes = [
-      [261.63, 293.66, 329.63],
-      [392.00, 440.00, 493.88],
-      [523.25, 587.33, 659.25],
-      [783.99, 880.00, 987.77]
-    ];
-    const notes = baseNotes[lane] || baseNotes[0];
-    return notes[variation % notes.length];
-  }
-
-  playNote(lane) {
-    if (!this.ctx) return;
-    const now = this.ctx.currentTime;
-    const freq = this.getNoteFrequency(lane, Math.floor(Math.random() * 3));
-
-    const osc = this.ctx.createOscillator();
+  tone(frequency, duration, options = {}) {
+    if (!this.ctx || !this.effects) return;
+    const now = this.ctx.currentTime + (options.delay || 0);
+    const oscillator = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(freq, now);
-
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(0.3, now + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.15, now + 0.1);
-    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
-
-    osc.connect(gain);
-    gain.connect(this.masterGain);
-    osc.start(now);
-    osc.stop(now + 0.5);
-  }
-
-  playMiss() {
-    if (!this.ctx) return;
-    const now = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(150, now);
-    osc.frequency.exponentialRampToValueAtTime(50, now + 0.2);
-    gain.gain.setValueAtTime(0.15, now);
-    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
-    osc.connect(gain);
-    gain.connect(this.masterGain);
-    osc.start(now);
-    osc.stop(now + 0.2);
-  }
-
-  playGameOver() {
-    if (!this.ctx) return;
-    const now = this.ctx.currentTime;
-    [200, 150, 100].forEach((freq, i) => {
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, now + i * 0.15);
-      gain.gain.setValueAtTime(0.2, now + i * 0.15);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.15 + 0.3);
-      osc.connect(gain);
-      gain.connect(this.masterGain);
-      osc.start(now + i * 0.15);
-      osc.stop(now + i * 0.15 + 0.3);
-    });
-  }
-
-  startBackgroundBeat() {
-    if (!this.ctx) return;
-    this.stopBackgroundBeat();
-
-    const bpm = 120;
-    const beatLen = 60 / bpm;
-    let nextBeat = this.ctx.currentTime + 0.05;
-
-    const kickDrum = (t) => {
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(150, t);
-      osc.frequency.exponentialRampToValueAtTime(40, t + 0.08);
-      gain.gain.setValueAtTime(0.35, t);
-      gain.gain.exponentialRampToValueAtTime(0.01, t + 0.2);
-      osc.connect(gain);
-      gain.connect(this.masterGain);
-      osc.start(t);
-      osc.stop(t + 0.25);
-    };
-
-    const hiHat = (t, accent = false) => {
-      const buf = this.ctx.createBuffer(1, this.ctx.sampleRate * 0.05, this.ctx.sampleRate);
-      const data = buf.getChannelData(0);
-      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
-      const source = this.ctx.createBufferSource();
-      const gain = this.ctx.createGain();
-      const filter = this.ctx.createBiquadFilter();
-      filter.type = 'highpass';
-      filter.frequency.value = 8000;
-      source.buffer = buf;
-      gain.gain.setValueAtTime(accent ? 0.12 : 0.06, t);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
-      source.connect(filter);
-      filter.connect(gain);
-      gain.connect(this.masterGain);
-      source.start(t);
-    };
-
-    const bass = (t, freq) => {
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(freq, t);
-      gain.gain.setValueAtTime(0.08, t);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + beatLen * 0.9);
-      const filter = this.ctx.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.frequency.value = 400;
-      osc.connect(filter);
-      filter.connect(gain);
-      gain.connect(this.masterGain);
-      osc.start(t);
-      osc.stop(t + beatLen);
-    };
-
-    const bassLine = [65.41, 65.41, 87.31, 82.41, 65.41, 65.41, 73.42, 77.78];
-    let beatCount = 0;
-
-    const scheduleBeat = () => {
-      while (nextBeat < this.ctx.currentTime + 0.3) {
-        const beat = beatCount % 4;
-        if (beat === 0 || beat === 2) kickDrum(nextBeat);
-        hiHat(nextBeat, beat === 0 || beat === 2);
-        hiHat(nextBeat + beatLen * 0.5, false);
-        bass(nextBeat, bassLine[beatCount % bassLine.length]);
-        nextBeat += beatLen;
-        beatCount++;
-      }
-    };
-
-    scheduleBeat();
-    this._bgInterval = setInterval(scheduleBeat, 100);
-  }
-
-  stopBackgroundBeat() {
-    if (this._bgInterval) {
-      clearInterval(this._bgInterval);
-      this._bgInterval = null;
-    }
-  }
-}
-
-// ============== DIFFICULTY CONFIGS ==============
-const DIFFICULTIES = {
-  easy: {
-    baseSpeed: 2.5,
-    maxSpeed: 8,
-    speedIncrement: 0.1,
-    speedIncreaseInterval: 7000,
-    baseSpawnInterval: 900,
-    minSpawnInterval: 500,
-    hitTolerance: 60,
-    maxLives: 5
-  },
-  normal: {
-    baseSpeed: 3,
-    maxSpeed: 12,
-    speedIncrement: 0.15,
-    speedIncreaseInterval: 5000,
-    baseSpawnInterval: 700,
-    minSpawnInterval: 300,
-    hitTolerance: 45,
-    maxLives: 3
-  },
-  hard: {
-    baseSpeed: 4.5,
-    maxSpeed: 16,
-    speedIncrement: 0.25,
-    speedIncreaseInterval: 3500,
-    baseSpawnInterval: 500,
-    minSpawnInterval: 200,
-    hitTolerance: 30,
-    maxLives: 2
-  }
-};
-
-// ============== GAME CONFIG ==============
-const CONFIG = {
-  lanes: 4,
-  laneColors: ['#ff6b6b', '#feca57', '#48dbfb', '#ff9ff3'],
-  noteHeight: 80,
-  hitZoneY: 100
-};
-
-const KEY_MAP = { 'd': 0, 'D': 0, 'f': 1, 'F': 1, 'j': 2, 'J': 2, 'k': 3, 'K': 3 };
-
-const COMBO_MILESTONES = [
-  { count: 10, label: '10 COMBO!', color: '#48dbfb' },
-  { count: 25, label: '25 COMBO!', color: '#feca57' },
-  { count: 50, label: '50 COMBO! 🔥', color: '#ff9ff3' },
-  { count: 100, label: '100 COMBO!!', color: '#00e5bf' }
-];
-
-// ============== GAME STATE ==============
-let diff = { ...DIFFICULTIES.normal };
-let selectedDifficulty = 'normal';
-
-let state = {
-  playing: false,
-  paused: false,
-  score: 0,
-  combo: 0,
-  maxCombo: 0,
-  notesHit: 0,
-  notesMissed: 0,
-  lives: diff.maxLives,
-  speed: diff.baseSpeed,
-  notes: [],
-  lastSpawn: 0,
-  lastSpeedIncrease: 0,
-  startTime: 0,
-  invincible: false
-};
-
-// ============== LOCAL STORAGE ==============
-function loadStats() {
-  try {
-    return JSON.parse(localStorage.getItem('beatrain_stats') || '{}');
-  } catch { return {}; }
-}
-
-function saveStats(stats) {
-  localStorage.setItem('beatrain_stats', JSON.stringify(stats));
-}
-
-function getHighScore(difficulty) {
-  return loadStats()[`hs_${difficulty}`] || 0;
-}
-
-function updateHighScore(difficulty, score) {
-  const stats = loadStats();
-  const key = `hs_${difficulty}`;
-  const prev = stats[key] || 0;
-  const isNew = score > prev;
-  if (isNew) {
-    stats[key] = score;
-    saveStats(stats);
-  }
-  return isNew;
-}
-
-// ============== CANVAS SETUP ==============
-const canvas = document.getElementById('gameCanvas');
-const ctx = canvas.getContext('2d');
-const audio = new AudioEngine();
-
-let canvasW = 0, canvasH = 0, laneW = 0;
-
-function resizeCanvas() {
-  const area = document.getElementById('gameArea');
-  const rect = area.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-
-  canvas.width = rect.width * dpr;
-  canvas.height = rect.height * dpr;
-  canvas.style.width = rect.width + 'px';
-  canvas.style.height = rect.height + 'px';
-
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  canvasW = rect.width;
-  canvasH = rect.height;
-  laneW = canvasW / CONFIG.lanes;
-}
-
-// ============== NOTE DRAWING ==============
-function hexToRgba(hex, alpha) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
-function drawMusicNote(x, y, w, h, lane, type) {
-  const color = CONFIG.laneColors[lane];
-  const cx = x + w / 2;
-  ctx.save();
-  ctx.shadowColor = color;
-  ctx.shadowBlur = 12;
-  ctx.translate(cx, y + h / 2);
-  switch (type) {
-    case 0: drawQuarterNote(0, 0, 20, color); break;
-    case 1: drawEighthNote(0, 0, 20, color); break;
-    case 2: drawBeamedNotes(0, 0, 18, color); break;
-    case 3: drawSixteenthNote(0, 0, 20, color); break;
-  }
-  ctx.restore();
-}
-
-function drawQuarterNote(x, y, size, color) {
-  ctx.beginPath();
-  ctx.ellipse(x, y + 8, size * 0.4, size * 0.28, -0.25, 0, Math.PI * 2);
-  ctx.fillStyle = color;
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(x + size * 0.3, y + 5);
-  ctx.lineTo(x + size * 0.3, y - size * 0.8);
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2.5;
-  ctx.stroke();
-}
-
-function drawEighthNote(x, y, size, color) {
-  ctx.beginPath();
-  ctx.ellipse(x, y + 8, size * 0.4, size * 0.28, -0.25, 0, Math.PI * 2);
-  ctx.fillStyle = color;
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(x + size * 0.3, y + 5);
-  ctx.lineTo(x + size * 0.3, y - size * 0.8);
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2.5;
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(x + size * 0.3, y - size * 0.8);
-  ctx.quadraticCurveTo(x + size * 0.7, y - size * 0.5, x + size * 0.5, y - size * 0.1);
-  ctx.lineWidth = 3;
-  ctx.stroke();
-}
-
-function drawBeamedNotes(x, y, size, color) {
-  ctx.beginPath();
-  ctx.ellipse(x - size * 0.4, y + 6, size * 0.35, size * 0.25, -0.25, 0, Math.PI * 2);
-  ctx.ellipse(x + size * 0.3, y + 2, size * 0.35, size * 0.25, -0.25, 0, Math.PI * 2);
-  ctx.fillStyle = color;
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(x - size * 0.1, y + 4);
-  ctx.lineTo(x - size * 0.1, y - size * 0.7);
-  ctx.moveTo(x + size * 0.6, y);
-  ctx.lineTo(x + size * 0.6, y - size * 0.7);
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2.5;
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(x - size * 0.1, y - size * 0.7);
-  ctx.lineTo(x + size * 0.6, y - size * 0.7);
-  ctx.lineWidth = 4;
-  ctx.stroke();
-}
-
-function drawSixteenthNote(x, y, size, color) {
-  ctx.beginPath();
-  ctx.ellipse(x, y + 8, size * 0.4, size * 0.28, -0.25, 0, Math.PI * 2);
-  ctx.fillStyle = color;
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(x + size * 0.3, y + 5);
-  ctx.lineTo(x + size * 0.3, y - size * 0.8);
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2.5;
-  ctx.stroke();
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(x + size * 0.3, y - size * 0.8);
-  ctx.quadraticCurveTo(x + size * 0.7, y - size * 0.6, x + size * 0.5, y - size * 0.3);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(x + size * 0.3, y - size * 0.6);
-  ctx.quadraticCurveTo(x + size * 0.7, y - size * 0.4, x + size * 0.5, y - size * 0.1);
-  ctx.stroke();
-}
-
-// ============== RENDERING ==============
-function drawLanes() {
-  for (let i = 0; i < CONFIG.lanes; i++) {
-    const grad = ctx.createLinearGradient(0, canvasH - 150, 0, canvasH);
-    const baseColor = CONFIG.laneColors[i];
-    grad.addColorStop(0, 'rgba(0,0,0,0)');
-    grad.addColorStop(1, hexToRgba(baseColor, 0.055));
-    ctx.fillStyle = grad;
-    ctx.fillRect(i * laneW, canvasH - 150, laneW, 150);
-  }
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
-  ctx.lineWidth = 1;
-  for (let i = 1; i < CONFIG.lanes; i++) {
-    ctx.beginPath();
-    ctx.moveTo(i * laneW, 0);
-    ctx.lineTo(i * laneW, canvasH);
-    ctx.stroke();
-  }
-}
-
-function render() {
-  ctx.clearRect(0, 0, canvasW, canvasH);
-  drawLanes();
-  state.notes.forEach(note => {
-    if (!note.hit) {
-      drawMusicNote(note.lane * laneW, note.y, laneW, CONFIG.noteHeight, note.lane, note.type);
-    }
-  });
-}
-
-// ============== GAME LOGIC ==============
-function spawnNote(timestamp) {
-  const interval = Math.max(
-    diff.minSpawnInterval,
-    diff.baseSpawnInterval - (state.speed - diff.baseSpeed) * 30
-  );
-  if (timestamp - state.lastSpawn >= interval) {
-    const lane = Math.floor(Math.random() * CONFIG.lanes);
-    state.notes.push({ lane, y: -CONFIG.noteHeight, type: Math.floor(Math.random() * 4), hit: false });
-    state.lastSpawn = timestamp;
-  }
-}
-
-function updateSpeed(timestamp) {
-  if (timestamp - state.lastSpeedIncrease >= diff.speedIncreaseInterval) {
-    if (state.speed < diff.maxSpeed) {
-      state.speed += diff.speedIncrement;
-      document.getElementById('speedDisplay').textContent = state.speed.toFixed(1);
-    }
-    state.lastSpeedIncrease = timestamp;
-  }
-}
-
-function update(timestamp) {
-  if (!state.playing || state.paused) return;
-
-  spawnNote(timestamp);
-  updateSpeed(timestamp);
-
-  const hitLine = canvasH - CONFIG.hitZoneY;
-
-  state.notes = state.notes.filter(note => {
-    note.y += state.speed;
-
-    if (!note.hit && note.y > hitLine + diff.hitTolerance) {
-      note.hit = true;
-      state.notesMissed++;
-      if (!state.invincible) {
-        loseLife();
-        showFeedback(note.lane, 'MISS', '#ff4757');
-        state.combo = 0;
-        updateUI();
-      }
-    }
-
-    return note.y < canvasH + 50;
-  });
-}
-
-function gameLoop(timestamp) {
-  if (!state.playing) return;
-  update(timestamp);
-  render();
-  requestAnimationFrame(gameLoop);
-}
-
-// ============== INPUT HANDLING ==============
-function flashLane(lane) {
-  const flashes = document.querySelectorAll('.lane-flash');
-  if (flashes[lane]) {
-    flashes[lane].classList.remove('flash');
-    void flashes[lane].offsetWidth; // reflow to restart anim
-    flashes[lane].classList.add('flash');
-  }
-}
-
-function triggerLanePress(laneIndex) {
-  const lanes = document.querySelectorAll('.touch-lane');
-  if (lanes[laneIndex]) {
-    lanes[laneIndex].classList.add('pressed');
-    setTimeout(() => lanes[laneIndex].classList.remove('pressed'), 150);
-  }
-}
-
-function handleInput(lane) {
-  if (!state.playing || state.paused) return;
-
-  const hitLine = canvasH - CONFIG.hitZoneY;
-  let closestNote = null;
-  let minDist = diff.hitTolerance;
-
-  state.notes.forEach(note => {
-    if (note.lane === lane && !note.hit) {
-      const noteCenter = note.y + CONFIG.noteHeight / 2;
-      const dist = Math.abs(noteCenter - hitLine);
-      if (dist < minDist) {
-        minDist = dist;
-        closestNote = note;
-      }
-    }
-  });
-
-  if (closestNote) {
-    closestNote.hit = true;
-    state.combo++;
-    state.maxCombo = Math.max(state.maxCombo, state.combo);
-    state.notesHit++;
-
-    const accuracy = 1 - (minDist / diff.hitTolerance);
-    const points = Math.floor(100 * accuracy * (1 + state.combo * 0.1));
-    state.score += points;
-
-    audio.playNote(lane);
-    flashLane(lane);
-
-    let text, color;
-    if (minDist < diff.hitTolerance * 0.33) {
-      text = 'PERFECT'; color = '#00e5bf';
-    } else if (minDist < diff.hitTolerance * 0.66) {
-      text = 'GREAT'; color = '#feca57';
+    const filter = this.ctx.createBiquadFilter();
+    oscillator.type = options.type || 'sine';
+    oscillator.frequency.setValueAtTime(frequency, now);
+    if (options.endFrequency) oscillator.frequency.exponentialRampToValueAtTime(options.endFrequency, now + duration);
+    filter.type = 'lowpass';
+    filter.frequency.value = options.filter || 2800;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(options.volume || 0.14, now + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    oscillator.connect(filter);
+    filter.connect(gain);
+    if (this.ctx.createStereoPanner && Number.isFinite(options.pan)) {
+      const panner = this.ctx.createStereoPanner();
+      panner.pan.value = options.pan;
+      gain.connect(panner);
+      panner.connect(this.effects);
     } else {
-      text = 'OK'; color = '#48dbfb';
+      gain.connect(this.effects);
     }
-    showFeedback(lane, text, color);
-
-    // Check combo milestone
-    checkComboMilestone(state.combo);
-
-  } else {
-    if (!state.invincible) {
-      loseLife();
-      audio.playMiss();
-      showFeedback(lane, 'MISS', '#ff4757');
-      state.combo = 0;
-    }
+    oscillator.start(now);
+    oscillator.stop(now + duration + 0.04);
   }
 
-  updateUI();
-}
+  hit(lane, quality) {
+    const scale = [261.63, 329.63, 392, 523.25];
+    const root = scale[lane];
+    const volume = quality === 'PERFECT' ? 0.2 : quality === 'GREAT' ? 0.16 : 0.12;
+    const pan = -0.72 + lane * 0.48;
+    this.tone(root, 0.34, { type: 'triangle', volume, pan, filter: 2400 });
+    this.tone(root * 2, 0.24, { type: 'sine', volume: volume * 0.42, pan, delay: 0.018 });
+  }
 
-function checkComboMilestone(combo) {
-  const milestone = COMBO_MILESTONES.find(m => m.count === combo);
-  if (!milestone) return;
+  miss() {
+    this.tone(145, 0.2, { type: 'sine', endFrequency: 78, volume: 0.09, filter: 500 });
+  }
 
-  // Change hit-line color
-  document.querySelector('.hit-line').style.cssText =
-    `background: ${milestone.color}; box-shadow: 0 0 20px ${milestone.color}, 0 0 40px ${milestone.color}40;`;
-  document.documentElement.style.setProperty('--hit-line-color', milestone.color);
+  milestone() {
+    [523.25, 659.25, 783.99].forEach((note, index) => this.tone(note, 0.42, { delay: index * 0.07, volume: 0.11, type: 'triangle' }));
+  }
 
-  // Show banner
-  const banner = document.getElementById('comboBanner');
-  banner.textContent = milestone.label;
-  banner.style.color = milestone.color;
-  banner.classList.remove('show');
-  void banner.offsetWidth;
-  banner.classList.add('show');
-  setTimeout(() => banner.classList.remove('show'), 1300);
-}
+  gameOver() {
+    [392, 329.63, 261.63].forEach((note, index) => this.tone(note, 0.55, { delay: index * 0.14, volume: 0.11, type: 'sine' }));
+  }
 
-// ============== LIVES & FEEDBACK ==============
-function loseLife() {
-  state.lives--;
-  updateLivesDisplay();
+  startMusic() {
+    if (!this.ctx || this.timer) return;
+    const now = this.ctx.currentTime;
+    const padGain = this.ctx.createGain();
+    const padFilter = this.ctx.createBiquadFilter();
+    padGain.gain.setValueAtTime(0.0001, now);
+    padGain.gain.exponentialRampToValueAtTime(0.07, now + 1.8);
+    padFilter.type = 'lowpass';
+    padFilter.frequency.value = 620;
+    padGain.connect(padFilter);
+    padFilter.connect(this.music);
+    [65.41, 98].forEach((frequency, index) => {
+      const oscillator = this.ctx.createOscillator();
+      oscillator.type = index ? 'sine' : 'triangle';
+      oscillator.frequency.value = frequency;
+      oscillator.detune.value = index ? 4 : -4;
+      oscillator.connect(padGain);
+      oscillator.start();
+      this.padNodes.push(oscillator);
+    });
+    this.padNodes.push(padGain);
+    this.beat = 0;
+    this.timer = window.setInterval(() => this.pulse(), 500);
+    this.pulse();
+  }
 
-  document.querySelector('.game-wrapper').classList.add('screen-shake');
-  setTimeout(() => document.querySelector('.game-wrapper').classList.remove('screen-shake'), 300);
+  pulse() {
+    if (!this.ctx || !this.music) return;
+    const now = this.ctx.currentTime;
+    const oscillator = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    const filter = this.ctx.createBiquadFilter();
+    const notes = [130.81, 146.83, 164.81, 146.83, 130.81, 174.61, 164.81, 146.83];
+    oscillator.type = 'sine';
+    oscillator.frequency.value = notes[this.beat % notes.length];
+    filter.type = 'lowpass';
+    filter.frequency.value = 420;
+    gain.gain.setValueAtTime(0.04, now);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.42);
+    oscillator.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.music);
+    oscillator.start(now);
+    oscillator.stop(now + 0.46);
+    this.beat += 1;
+  }
 
-  // Invincibility grace period (1 second)
-  state.invincible = true;
-  const overlay = document.getElementById('invincibleOverlay');
-  overlay.classList.add('active');
-  setTimeout(() => {
-    state.invincible = false;
-    overlay.classList.remove('active');
-  }, 1000);
-
-  if (state.lives <= 0) endGame();
-}
-
-function updateLivesDisplay() {
-  const hearts = document.querySelectorAll('.life');
-  hearts.forEach((heart, i) => {
-    heart.classList.toggle('lost', i >= state.lives);
-  });
-}
-
-function showFeedback(lane, text, color) {
-  const area = document.getElementById('gameArea');
-  const feedback = document.createElement('div');
-  feedback.className = 'hit-feedback';
-  feedback.textContent = text;
-  feedback.style.color = color;
-  feedback.style.left = (lane * laneW + laneW / 2) + 'px';
-  feedback.style.top = (canvasH - CONFIG.hitZoneY - 50) + 'px';
-  area.appendChild(feedback);
-  setTimeout(() => feedback.remove(), 500);
-}
-
-// ============== UI UPDATES ==============
-function updateUI() {
-  document.getElementById('scoreDisplay').textContent = state.score;
-  document.getElementById('comboDisplay').textContent = state.combo;
-}
-
-function buildLivesUI(maxLives) {
-  const container = document.getElementById('livesContainer');
-  container.innerHTML = '';
-  for (let i = 0; i < maxLives; i++) {
-    container.innerHTML += `<div class="life"><svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg></div>`;
+  stopMusic() {
+    if (this.timer) window.clearInterval(this.timer);
+    this.timer = null;
+    this.padNodes.forEach(node => {
+      try {
+        if (typeof node.stop === 'function') node.stop();
+        if (node.gain && this.ctx) node.gain.setTargetAtTime(0.0001, this.ctx.currentTime, 0.08);
+      } catch (_) { /* Node may already be stopped. */ }
+    });
+    this.padNodes = [];
   }
 }
 
-function updateStartScreenStats() {
-  const hs = getHighScore(selectedDifficulty);
-  document.getElementById('highscoreValue').textContent = hs > 0 ? hs.toLocaleString() : '—';
-}
+const DIFFICULTIES = {
+  easy: { label: 'DRIFT', speed: 0.28, maxSpeed: 0.42, spawn: 0.92, minSpawn: 0.7, tolerance: 0.135, lives: 5 },
+  normal: { label: 'FLOW', speed: 0.34, maxSpeed: 0.54, spawn: 0.75, minSpawn: 0.5, tolerance: 0.105, lives: 4 },
+  hard: { label: 'RUSH', speed: 0.42, maxSpeed: 0.68, spawn: 0.58, minSpawn: 0.36, tolerance: 0.08, lives: 3 }
+};
 
-// ============== ACCURACY RATING ==============
-function getAccuracyRating(notesHit, notesMissed) {
-  const total = notesHit + notesMissed;
-  if (total === 0) return { rank: 'C', cls: 'c-rank' };
-  const pct = notesHit / total;
-  if (pct >= 0.95) return { rank: 'S', cls: 's-rank' };
-  if (pct >= 0.80) return { rank: 'A', cls: 'a-rank' };
-  if (pct >= 0.60) return { rank: 'B', cls: 'b-rank' };
-  return { rank: 'C', cls: 'c-rank' };
-}
+const COLORS = ['#ff7a88', '#ffd36a', '#66ccff', '#bc8cff'];
+const KEY_TO_LANE = { d: 0, f: 1, j: 2, k: 3 };
+const sound = new Soundscape();
+const canvas = document.getElementById('gameCanvas');
+const context = canvas.getContext('2d', { alpha: false });
+const stage = document.getElementById('stage');
+const shell = document.getElementById('gameShell');
+const judgement = document.getElementById('judgement');
 
-// ============== PAUSE ==============
-function togglePause() {
-  if (!state.playing) return;
-  state.paused = !state.paused;
-  const pauseScreen = document.getElementById('pauseScreen');
-  const pauseBtn = document.getElementById('pauseBtn');
+let width = 0;
+let height = 0;
+let dpr = 1;
+let selectedDifficulty = 'normal';
+let config = DIFFICULTIES.normal;
+let animationFrame = 0;
+let lastFrame = 0;
+let countdownToken = 0;
+let isMuted = false;
+const heldKeys = new Set();
 
-  if (state.paused) {
-    pauseScreen.classList.add('active');
-    pauseBtn.textContent = '▶';
-    audio.stopBackgroundBeat();
-  } else {
-    pauseScreen.classList.remove('active');
-    pauseBtn.textContent = '⏸';
-    audio.startBackgroundBeat();
-    requestAnimationFrame(gameLoop);
-  }
-}
+let state = freshState();
 
-// ============== GAME FLOW ==============
-function startGame() {
-  audio.init();
-  diff = { ...DIFFICULTIES[selectedDifficulty] };
-
-  state = {
-    playing: true,
+function freshState() {
+  return {
+    playing: false,
     paused: false,
     score: 0,
     combo: 0,
     maxCombo: 0,
-    notesHit: 0,
-    notesMissed: 0,
-    lives: diff.maxLives,
-    speed: diff.baseSpeed,
+    hits: 0,
+    misses: 0,
+    lives: config.lives,
+    speed: config.speed,
+    spawnClock: 0,
+    elapsed: 0,
     notes: [],
-    lastSpawn: 0,
-    lastSpeedIncrease: 0,
-    startTime: performance.now(),
-    invincible: false
+    particles: [],
+    laneGlow: [0, 0, 0, 0],
+    visualTime: 0
   };
-
-  // Reset hit-line color
-  const hitLine = document.querySelector('.hit-line');
-  hitLine.style.cssText = '';
-
-  buildLivesUI(diff.maxLives);
-  updateUI();
-  updateLivesDisplay();
-  document.getElementById('speedDisplay').textContent = diff.baseSpeed.toFixed(1);
-  document.getElementById('startScreen').classList.remove('active');
-  document.getElementById('gameOverScreen').classList.remove('active');
-  document.getElementById('pauseScreen').classList.remove('active');
-  document.getElementById('pauseBtn').textContent = '⏸';
-  document.getElementById('pauseBtn').style.display = '';
-
-  audio.startBackgroundBeat();
-  requestAnimationFrame(gameLoop);
 }
 
-function endGame() {
+function resizeCanvas() {
+  const rect = stage.getBoundingClientRect();
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  width = Math.max(1, rect.width);
+  height = Math.max(1, rect.height);
+  canvas.width = Math.round(width * dpr);
+  canvas.height = Math.round(height * dpr);
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+  context.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function loadStats() {
+  try { return JSON.parse(localStorage.getItem('beatrain_stats_v2') || '{}'); }
+  catch (_) { return {}; }
+}
+
+function bestScore() {
+  return loadStats()[selectedDifficulty] || 0;
+}
+
+function saveScore() {
+  const stats = loadStats();
+  const previous = stats[selectedDifficulty] || 0;
+  const improved = state.score > previous;
+  if (improved) {
+    stats[selectedDifficulty] = state.score;
+    try { localStorage.setItem('beatrain_stats_v2', JSON.stringify(stats)); } catch (_) { /* Storage can be disabled. */ }
+  }
+  return improved;
+}
+
+function updateBestScore() {
+  const best = bestScore();
+  document.getElementById('bestScore').textContent = best ? best.toLocaleString() : '—';
+}
+
+function laneGeometry(lane, progress) {
+  const t = Math.max(0, Math.min(1.18, progress));
+  const depth = Math.pow(Math.min(1, t), 1.62);
+  const horizonY = height * 0.11;
+  const hitY = height * 0.82;
+  const topWidth = width * 0.16;
+  const bottomWidth = width * 0.92;
+  const roadWidth = topWidth + (bottomWidth - topWidth) * depth;
+  const left = width / 2 - roadWidth / 2;
+  const laneWidth = roadWidth / 4;
+  return { x: left + laneWidth * (lane + 0.5), y: horizonY + (hitY - horizonY) * depth, laneWidth, depth };
+}
+
+function roadEdge(side, progress) {
+  const geometry = laneGeometry(side < 0 ? 0 : 3, progress);
+  return side < 0 ? geometry.x - geometry.laneWidth / 2 : geometry.x + geometry.laneWidth / 2;
+}
+
+function roundedRect(ctx, x, y, w, h, radius) {
+  const r = Math.min(radius, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function renderBackground() {
+  const bg = context.createLinearGradient(0, 0, 0, height);
+  bg.addColorStop(0, '#07111e');
+  bg.addColorStop(0.52, '#08131f');
+  bg.addColorStop(1, '#03070d');
+  context.fillStyle = bg;
+  context.fillRect(0, 0, width, height);
+
+  const horizon = context.createRadialGradient(width / 2, height * 0.12, 0, width / 2, height * 0.12, width * 0.52);
+  horizon.addColorStop(0, 'rgba(98,231,245,.18)');
+  horizon.addColorStop(0.35, 'rgba(98,231,245,.04)');
+  horizon.addColorStop(1, 'rgba(0,0,0,0)');
+  context.fillStyle = horizon;
+  context.fillRect(0, 0, width, height * 0.58);
+
+  context.fillStyle = 'rgba(255,255,255,.12)';
+  for (let i = 0; i < 28; i += 1) {
+    const seed = (i * 73) % 101;
+    const x = (seed / 101) * width;
+    const y = ((i * 47) % 83) / 83 * height * 0.45;
+    const pulse = 0.35 + Math.sin(state.visualTime * 0.0015 + i) * 0.25;
+    context.globalAlpha = pulse;
+    context.fillRect(x, y, i % 5 === 0 ? 2 : 1, i % 5 === 0 ? 2 : 1);
+  }
+  context.globalAlpha = 1;
+}
+
+function renderRoad() {
+  const horizonY = height * 0.11;
+  const hitY = height * 0.82;
+  const leftTop = roadEdge(-1, 0);
+  const rightTop = roadEdge(1, 0);
+  const leftBottom = roadEdge(-1, 1.18);
+  const rightBottom = roadEdge(1, 1.18);
+
+  const road = context.createLinearGradient(0, horizonY, 0, hitY);
+  road.addColorStop(0, 'rgba(12,25,40,.52)');
+  road.addColorStop(1, 'rgba(10,18,30,.94)');
+  context.beginPath();
+  context.moveTo(leftTop, horizonY);
+  context.lineTo(rightTop, horizonY);
+  context.lineTo(rightBottom, height);
+  context.lineTo(leftBottom, height);
+  context.closePath();
+  context.fillStyle = road;
+  context.fill();
+
+  for (let lane = 0; lane < 4; lane += 1) {
+    if (state.laneGlow[lane] <= 0) continue;
+    const top = laneGeometry(lane, 0);
+    const bottom = laneGeometry(lane, 1.18);
+    const gradient = context.createLinearGradient(0, horizonY, 0, height);
+    gradient.addColorStop(0, 'rgba(0,0,0,0)');
+    gradient.addColorStop(1, hex(COLORS[lane], state.laneGlow[lane] * 0.22));
+    context.beginPath();
+    context.moveTo(top.x - top.laneWidth / 2, horizonY);
+    context.lineTo(top.x + top.laneWidth / 2, horizonY);
+    context.lineTo(bottom.x + bottom.laneWidth / 2, height);
+    context.lineTo(bottom.x - bottom.laneWidth / 2, height);
+    context.closePath();
+    context.fillStyle = gradient;
+    context.fill();
+  }
+
+  context.lineWidth = 1;
+  for (let boundary = 0; boundary <= 4; boundary += 1) {
+    const topRoad = width * 0.16;
+    const bottomRoad = width * 0.92;
+    const topX = width / 2 - topRoad / 2 + topRoad * boundary / 4;
+    const bottomX = width / 2 - bottomRoad / 2 + bottomRoad * boundary / 4;
+    const gradient = context.createLinearGradient(0, horizonY, 0, height);
+    gradient.addColorStop(0, 'rgba(145,205,225,.05)');
+    gradient.addColorStop(1, 'rgba(145,205,225,.22)');
+    context.strokeStyle = gradient;
+    context.beginPath();
+    context.moveTo(topX, horizonY);
+    context.lineTo(bottomX, height);
+    context.stroke();
+  }
+
+  const gridOffset = (state.visualTime * 0.00012) % 0.12;
+  for (let i = 0; i < 10; i += 1) {
+    const progress = (i * 0.12 + gridOffset) % 1.2;
+    const a = laneGeometry(0, progress);
+    const b = laneGeometry(3, progress);
+    context.strokeStyle = `rgba(130,195,215,${0.035 + a.depth * 0.11})`;
+    context.beginPath();
+    context.moveTo(a.x - a.laneWidth / 2, a.y);
+    context.lineTo(b.x + b.laneWidth / 2, b.y);
+    context.stroke();
+  }
+
+  const left = roadEdge(-1, 1);
+  const right = roadEdge(1, 1);
+  const hitGradient = context.createLinearGradient(left, 0, right, 0);
+  hitGradient.addColorStop(0, 'rgba(98,231,245,0)');
+  hitGradient.addColorStop(.25, 'rgba(98,231,245,.9)');
+  hitGradient.addColorStop(.75, 'rgba(98,242,198,.9)');
+  hitGradient.addColorStop(1, 'rgba(98,242,198,0)');
+  context.save();
+  context.shadowColor = '#62e7f5';
+  context.shadowBlur = 18;
+  context.strokeStyle = hitGradient;
+  context.lineWidth = 3;
+  context.beginPath();
+  context.moveTo(left, hitY);
+  context.lineTo(right, hitY);
+  context.stroke();
+  context.restore();
+}
+
+function renderNote(note) {
+  const geometry = laneGeometry(note.lane, note.progress);
+  const tileWidth = Math.max(8, geometry.laneWidth * 0.68);
+  const tileHeight = Math.max(5, 8 + geometry.depth * 28);
+  const x = geometry.x - tileWidth / 2;
+  const y = geometry.y - tileHeight / 2;
+  const depth = Math.max(2, 2 + geometry.depth * 7);
+  const color = COLORS[note.lane];
+
+  context.save();
+  context.globalAlpha = Math.min(1, 0.3 + geometry.depth * 1.1);
+  context.shadowColor = color;
+  context.shadowBlur = 6 + geometry.depth * 18;
+  roundedRect(context, x, y + depth, tileWidth, tileHeight, 4 + geometry.depth * 8);
+  context.fillStyle = hex(color, .3 + geometry.depth * .3);
+  context.fill();
+  roundedRect(context, x, y, tileWidth, tileHeight, 4 + geometry.depth * 8);
+  const face = context.createLinearGradient(x, y, x, y + tileHeight);
+  face.addColorStop(0, '#f8fbff');
+  face.addColorStop(.22, color);
+  face.addColorStop(1, hex(color, .64));
+  context.fillStyle = face;
+  context.fill();
+  context.shadowBlur = 0;
+  context.strokeStyle = 'rgba(255,255,255,.7)';
+  context.lineWidth = Math.max(.5, geometry.depth * 1.5);
+  context.stroke();
+  context.fillStyle = 'rgba(255,255,255,.75)';
+  roundedRect(context, x + tileWidth * .16, y + tileHeight * .17, tileWidth * .68, Math.max(1, tileHeight * .12), 4);
+  context.fill();
+  context.restore();
+}
+
+function renderParticles() {
+  state.particles.forEach(particle => {
+    context.globalAlpha = Math.max(0, particle.life);
+    context.fillStyle = particle.color;
+    context.beginPath();
+    context.arc(particle.x, particle.y, particle.size * particle.life, 0, Math.PI * 2);
+    context.fill();
+  });
+  context.globalAlpha = 1;
+}
+
+function render() {
+  renderBackground();
+  renderRoad();
+  state.notes.forEach(renderNote);
+  renderParticles();
+}
+
+function hex(value, alpha) {
+  const clean = value.replace('#', '');
+  const number = Number.parseInt(clean, 16);
+  return `rgba(${number >> 16},${number >> 8 & 255},${number & 255},${alpha})`;
+}
+
+function spawnNote() {
+  const recent = state.notes.filter(note => note.progress < .2).map(note => note.lane);
+  const choices = [0, 1, 2, 3].filter(lane => !recent.includes(lane));
+  const lane = choices.length ? choices[Math.floor(Math.random() * choices.length)] : Math.floor(Math.random() * 4);
+  state.notes.push({ lane, progress: 0, id: `${Date.now()}-${Math.random()}` });
+}
+
+function update(delta) {
+  if (!state.playing || state.paused) return;
+  state.elapsed += delta;
+  state.spawnClock += delta;
+  const level = Math.min(1, state.elapsed / 80);
+  state.speed = config.speed + (config.maxSpeed - config.speed) * level;
+  const spawnInterval = config.spawn + (config.minSpawn - config.spawn) * level;
+  if (state.spawnClock >= spawnInterval) {
+    state.spawnClock %= spawnInterval;
+    spawnNote();
+  }
+
+  state.notes.forEach(note => { note.progress += state.speed * delta; });
+  const missed = state.notes.filter(note => note.progress > 1 + config.tolerance && !note.missed);
+  missed.forEach(note => {
+    note.missed = true;
+    state.misses += 1;
+    state.combo = 0;
+    state.lives -= 1;
+    sound.miss();
+    showJudgement('MISS', '#ff657a');
+    updateHud();
+    updateLives();
+    shell.classList.remove('shake');
+    void shell.offsetWidth;
+    shell.classList.add('shake');
+    if (navigator.vibrate) navigator.vibrate(35);
+    if (state.lives <= 0) finishGame();
+  });
+  state.notes = state.notes.filter(note => note.progress < 1.22 && !note.hit);
+
+  state.particles.forEach(particle => {
+    particle.x += particle.vx * delta;
+    particle.y += particle.vy * delta;
+    particle.vy += 45 * delta;
+    particle.life -= delta * 1.8;
+  });
+  state.particles = state.particles.filter(particle => particle.life > 0);
+  state.laneGlow = state.laneGlow.map(value => Math.max(0, value - delta * 2.8));
+  document.getElementById('paceLabel').textContent = `${config.label} ${(state.speed / config.speed).toFixed(1)}×`;
+}
+
+function loop(timestamp) {
+  const delta = lastFrame ? Math.min((timestamp - lastFrame) / 1000, 0.05) : 0;
+  lastFrame = timestamp;
+  state.visualTime = timestamp;
+  update(delta);
+  render();
+  animationFrame = requestAnimationFrame(loop);
+}
+
+function pressLane(lane) {
+  const button = document.querySelector(`[data-lane="${lane}"]`);
+  button.classList.remove('pressed');
+  void button.offsetWidth;
+  button.classList.add('pressed');
+  window.setTimeout(() => button.classList.remove('pressed'), 120);
+  state.laneGlow[lane] = 1;
+  if (!state.playing || state.paused) return;
+
+  let closest = null;
+  let distance = Infinity;
+  state.notes.forEach(note => {
+    if (note.lane !== lane || note.hit || note.missed) return;
+    const candidate = Math.abs(1 - note.progress);
+    if (candidate < distance) { closest = note; distance = candidate; }
+  });
+  if (!closest || distance > config.tolerance) return;
+
+  closest.hit = true;
+  state.hits += 1;
+  state.combo += 1;
+  state.maxCombo = Math.max(state.maxCombo, state.combo);
+  const accuracy = 1 - distance / config.tolerance;
+  const quality = accuracy > .72 ? 'PERFECT' : accuracy > .38 ? 'GREAT' : 'GOOD';
+  const base = quality === 'PERFECT' ? 120 : quality === 'GREAT' ? 90 : 65;
+  const multiplier = 1 + Math.min(state.combo, 50) * .025;
+  state.score += Math.round(base * multiplier);
+  sound.hit(lane, quality);
+  burst(lane, closest.progress, quality === 'PERFECT' ? 14 : 8);
+  showJudgement(quality, quality === 'PERFECT' ? '#62f2c6' : quality === 'GREAT' ? '#ffd36a' : '#66ccff');
+  if (navigator.vibrate) navigator.vibrate(quality === 'PERFECT' ? 14 : 8);
+  if ([10, 25, 50, 100].includes(state.combo)) {
+    sound.milestone();
+    showJudgement(`${state.combo} COMBO`, '#ffffff');
+  }
+  updateHud();
+}
+
+function burst(lane, progress, amount) {
+  const geometry = laneGeometry(lane, progress);
+  for (let i = 0; i < amount; i += 1) {
+    const angle = Math.random() * Math.PI * 2;
+    const velocity = 35 + Math.random() * 90;
+    state.particles.push({
+      x: geometry.x,
+      y: geometry.y,
+      vx: Math.cos(angle) * velocity,
+      vy: Math.sin(angle) * velocity,
+      size: 2 + Math.random() * 3,
+      life: .7 + Math.random() * .3,
+      color: COLORS[lane]
+    });
+  }
+}
+
+function showJudgement(text, color) {
+  judgement.textContent = text;
+  judgement.style.color = color;
+  judgement.classList.remove('show');
+  void judgement.offsetWidth;
+  judgement.classList.add('show');
+}
+
+function updateHud() {
+  document.getElementById('scoreDisplay').textContent = state.score.toLocaleString();
+  document.getElementById('comboDisplay').textContent = state.combo;
+}
+
+function buildLives() {
+  document.getElementById('lives').innerHTML = Array.from({ length: config.lives }, () => '<span class="life"></span>').join('');
+}
+
+function updateLives() {
+  document.querySelectorAll('.life').forEach((life, index) => life.classList.toggle('lost', index >= state.lives));
+}
+
+function setScreen(id) {
+  document.querySelectorAll('.screen').forEach(screen => screen.classList.toggle('active', screen.id === id));
+}
+
+async function countdown() {
+  const token = ++countdownToken;
+  const display = document.getElementById('countdown');
+  for (const label of ['3', '2', '1', 'GO']) {
+    if (token !== countdownToken) return false;
+    display.textContent = label;
+    display.classList.remove('show');
+    void display.offsetWidth;
+    display.classList.add('show');
+    await new Promise(resolve => window.setTimeout(resolve, label === 'GO' ? 460 : 650));
+  }
+  return token === countdownToken;
+}
+
+async function startGame() {
+  await sound.init();
+  sound.stopMusic();
+  config = DIFFICULTIES[selectedDifficulty];
+  state = freshState();
+  state.playing = true;
+  state.paused = true;
+  buildLives();
+  updateHud();
+  updateLives();
+  resizeCanvas();
+  setScreen('');
+  const completed = await countdown();
+  if (!completed || !state.playing) return;
+  state.paused = false;
+  state.spawnClock = config.spawn * .58;
+  lastFrame = performance.now();
+  sound.startMusic();
+}
+
+function togglePause(forcePause = false) {
+  if (!state.playing) return;
+  const shouldPause = forcePause || !state.paused;
+  if (state.paused === shouldPause) return;
+  state.paused = shouldPause;
+  if (shouldPause) {
+    sound.stopMusic();
+    setScreen('pauseScreen');
+  } else {
+    setScreen('');
+    lastFrame = performance.now();
+    sound.startMusic();
+  }
+}
+
+function quitToMenu() {
+  countdownToken += 1;
   state.playing = false;
-  audio.stopBackgroundBeat();
-  audio.playGameOver();
+  state.paused = false;
+  sound.stopMusic();
+  setScreen('startScreen');
+  updateBestScore();
+}
 
-  document.getElementById('pauseBtn').style.display = 'none';
-
-  // Stats
-  const rating = getAccuracyRating(state.notesHit, state.notesMissed);
-  const isNewBest = updateHighScore(selectedDifficulty, state.score);
-
+function finishGame() {
+  if (!state.playing) return;
+  state.playing = false;
+  state.paused = false;
+  sound.stopMusic();
+  sound.gameOver();
+  const total = state.hits + state.misses;
+  const accuracy = total ? state.hits / total : 0;
+  const rank = accuracy >= .95 ? 'S' : accuracy >= .82 ? 'A' : accuracy >= .66 ? 'B' : 'C';
+  document.getElementById('rank').textContent = rank;
+  document.getElementById('resultTitle').textContent = rank === 'S' ? 'Beautiful flow.' : rank === 'A' ? 'Great rhythm.' : rank === 'B' ? 'Good momentum.' : 'Keep finding the beat.';
   document.getElementById('finalScore').textContent = state.score.toLocaleString();
   document.getElementById('finalCombo').textContent = state.maxCombo;
-  document.getElementById('finalNotes').textContent = state.notesHit;
-
-  const badge = document.getElementById('accuracyBadge');
-  badge.textContent = rating.rank;
-  badge.className = `accuracy-badge ${rating.cls}`;
-
-  const newBest = document.getElementById('newBestBadge');
-  newBest.classList.toggle('visible', isNewBest);
-
-  document.getElementById('gameOverScreen').classList.add('active');
+  document.getElementById('finalAccuracy').textContent = `${Math.round(accuracy * 100)}%`;
+  document.getElementById('newBest').classList.toggle('visible', saveScore());
+  setScreen('resultScreen');
 }
 
-// ============== DIFFICULTY SELECTOR ==============
-document.querySelectorAll('.diff-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.diff-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    selectedDifficulty = btn.dataset.diff;
-    updateStartScreenStats();
+document.querySelectorAll('[data-difficulty]').forEach(button => {
+  button.addEventListener('click', () => {
+    selectedDifficulty = button.dataset.difficulty;
+    document.querySelectorAll('[data-difficulty]').forEach(item => item.classList.toggle('active', item === button));
+    updateBestScore();
   });
 });
 
-// ============== MUTE ==============
-let isMuted = false;
-document.getElementById('muteBtn').addEventListener('click', () => {
-  isMuted = !isMuted;
-  audio.setMute(isMuted);
-  const btn = document.getElementById('muteBtn');
-  btn.classList.toggle('muted', isMuted);
-  btn.textContent = isMuted ? '🔇' : '🔊';
+document.querySelectorAll('[data-lane]').forEach(button => {
+  button.addEventListener('pointerdown', event => {
+    event.preventDefault();
+    button.setPointerCapture?.(event.pointerId);
+    pressLane(Number(button.dataset.lane));
+  });
 });
 
-// ============== PAUSE BUTTON ==============
-document.getElementById('pauseBtn').addEventListener('click', togglePause);
-document.getElementById('resumeBtn').addEventListener('click', togglePause);
-
-// ============== GAME BUTTONS ==============
-document.getElementById('startBtn').addEventListener('click', startGame);
-document.getElementById('restartBtn').addEventListener('click', startGame);
-
-// ============== KEYBOARD ==============
-const pressedKeys = new Set();
-
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { togglePause(); return; }
-  if (KEY_MAP.hasOwnProperty(e.key) && !pressedKeys.has(e.key)) {
-    pressedKeys.add(e.key);
-    const laneIdx = KEY_MAP[e.key];
-    triggerLanePress(laneIdx);
-    handleInput(laneIdx);
+document.addEventListener('keydown', event => {
+  const key = event.key.toLowerCase();
+  if (key === 'escape' || key === 'p') {
+    event.preventDefault();
+    togglePause();
+    return;
+  }
+  if (Object.prototype.hasOwnProperty.call(KEY_TO_LANE, key) && !heldKeys.has(key)) {
+    event.preventDefault();
+    heldKeys.add(key);
+    pressLane(KEY_TO_LANE[key]);
   }
 });
 
-document.addEventListener('keyup', (e) => {
-  pressedKeys.delete(e.key);
+document.addEventListener('keyup', event => heldKeys.delete(event.key.toLowerCase()));
+document.getElementById('startButton').addEventListener('click', startGame);
+document.getElementById('replayButton').addEventListener('click', startGame);
+document.getElementById('pauseButton').addEventListener('click', () => togglePause());
+document.getElementById('resumeButton').addEventListener('click', () => togglePause());
+document.getElementById('quitButton').addEventListener('click', quitToMenu);
+document.getElementById('menuButton').addEventListener('click', quitToMenu);
+document.getElementById('soundButton').addEventListener('click', event => {
+  isMuted = !isMuted;
+  sound.setMuted(isMuted);
+  event.currentTarget.setAttribute('aria-pressed', String(isMuted));
+  event.currentTarget.setAttribute('aria-label', isMuted ? 'Enable sound' : 'Mute sound');
+  event.currentTarget.textContent = isMuted ? '×' : '♫';
 });
 
-// ============== TOUCH CONTROLS ==============
-document.querySelectorAll('.touch-lane').forEach(lane => {
-  const laneIndex = parseInt(lane.dataset.lane);
-  lane.addEventListener('touchstart', (e) => {
-    e.preventDefault();
-    handleInput(laneIndex);
-  }, { passive: false });
-  lane.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    handleInput(laneIndex);
-  });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && state.playing && !state.paused) togglePause(true);
 });
+window.addEventListener('blur', () => {
+  if (state.playing && !state.paused) togglePause(true);
+});
+window.addEventListener('resize', resizeCanvas, { passive: true });
+window.addEventListener('orientationchange', () => window.setTimeout(resizeCanvas, 150), { passive: true });
 
-// ============== RESIZE ==============
-window.addEventListener('resize', resizeCanvas);
-
-// ============== INIT ==============
 resizeCanvas();
-buildLivesUI(DIFFICULTIES.normal.maxLives);
-updateStartScreenStats();
-document.getElementById('pauseBtn').style.display = 'none';
+buildLives();
+updateBestScore();
+animationFrame = requestAnimationFrame(loop);
